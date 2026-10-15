@@ -1268,7 +1268,9 @@ git commit -m "feat: apply command with dry-run default and guard re-validation"
   - `def plan_undo(store: Store, run_id: int) -> dict[str, list[str]]` — label name to message IDs, from `run_messages` where `action == "add"`.
   - `def undo_run(client: GmailClient, store: Store, run_id: int, *, dry_run: bool) -> UndoStats` with `class UndoStats` — `labels: int`, `messages: int`, `undone: int`, `skipped_missing: int`.
 
-`undo` CLI: `gmail-sort undo RUN_ID [--config PATH] [--db PATH] [--yes]`.
+`undo` CLI: `gmail-sort undo RUN_ID [--db PATH] [--yes]`. No `--config`: undo reads
+only the local change log and never loads the config, so requiring one would ask for a
+file the command does not use.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1354,12 +1356,12 @@ Expected: FAIL — `ImportError: cannot import name 'plan_undo'`
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_undo.py -v`
-Expected: PASS, 8 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Run the whole suite**
 
 Run: `pytest -q`
-Expected: PASS, 110 tests, no failures.
+Expected: PASS, 122 tests, no failures.
 
 - [ ] **Step 6: Commit**
 

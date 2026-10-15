@@ -28,6 +28,7 @@ SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 DEFAULT_DB = "gmail-sort.sqlite"
 DEFAULT_PROPOSAL = "config.proposed.toml"
 DEFAULT_SAMPLE = 1000
+DEFAULT_EXCERPT_CHARS = 2000
 
 # Messages per LLM request. Small enough that one bad batch is cheap to retry.
 LLM_BATCH_SIZE = 50
@@ -67,6 +68,14 @@ class ApplyStats:
     skipped_missing: int = 0
     skipped_guard: int = 0
     batches: int = 0
+
+
+@dataclass(frozen=True)
+class UndoStats:
+    labels: int = 0
+    messages: int = 0
+    undone: int = 0
+    skipped_missing: int = 0
 
 
 def classifier_version_for(cfg: Config) -> str:
@@ -257,6 +266,61 @@ def apply_plan(
     )
 
 
+def plan_undo(store: Store, run_id: int) -> dict[str, list[str]]:
+    """Label name to message ids, from what this run actually added."""
+    plan: dict[str, list[str]] = {}
+    for message_id, label, action in store.iter_changes(run_id):
+        if action != "add":
+            continue
+        plan.setdefault(label, []).append(message_id)
+    return plan
+
+
+def undo_run(
+    client: GmailClient, store: Store, run_id: int, *, dry_run: bool
+) -> UndoStats:
+    """Remove exactly the labels one run added. Never deletes a message.
+
+    Caveat, documented in the README: if you add the same label by hand after
+    the run, undo removes it too.
+    """
+    plan = plan_undo(store, run_id)
+    by_name = {label.name: label for label in client.list_labels()}
+
+    counters: Counter[str] = Counter()
+    for name, message_ids in plan.items():
+        counters["labels"] += 1
+        counters["messages"] += len(message_ids)
+        label = by_name.get(name)
+        if label is None:
+            # The label was deleted since the run; there is nothing to remove.
+            counters["skipped_missing"] += len(message_ids)
+            continue
+        if dry_run:
+            continue
+
+        for chunk in chunked(message_ids, APPLY_BATCH_SIZE):
+            for message_id in chunk:
+                store.log_change(run_id, message_id, name, "remove")
+            try:
+                client.batch_modify(chunk, remove=[label.id])
+                counters["undone"] += len(chunk)
+            except Exception:
+                for message_id in chunk:
+                    try:
+                        client.batch_modify([message_id], remove=[label.id])
+                        counters["undone"] += 1
+                    except Exception:
+                        counters["skipped_missing"] += 1
+
+    return UndoStats(
+        labels=counters["labels"],
+        messages=counters["messages"],
+        undone=counters["undone"],
+        skipped_missing=counters["skipped_missing"],
+    )
+
+
 def survey(
     client: GmailClient, cfg: Config, *, top: int = 50, sample: int = DEFAULT_SAMPLE
 ) -> Survey:
@@ -355,6 +419,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _classify_command(args)
         if args.command == "apply":
             return _apply_command(args)
+        if args.command == "undo":
+            return _undo_command(args)
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -400,6 +466,14 @@ def _parser() -> argparse.ArgumentParser:
                               help="actually write to Gmail")
     apply_parser.add_argument("--limit", type=int, default=None,
                               help="cap how many messages are labelled this run")
+
+    undo_parser = subparsers.add_parser(
+        "undo", help="remove the labels one apply run added"
+    )
+    undo_parser.add_argument("run_id", type=int)
+    undo_parser.add_argument("--db", default=DEFAULT_DB)
+    undo_parser.add_argument("--yes", action="store_true",
+                             help="actually write to Gmail")
 
     return parser
 
@@ -485,6 +559,32 @@ def _apply_command(args) -> int:
     return 0
 
 
+def _undo_command(args) -> int:
+    with Store(args.db) as store:
+        if store.get_run(args.run_id) is None:
+            raise ConfigError(f"no such run: {args.run_id}")
+        plan = plan_undo(store, args.run_id)
+        total = sum(len(ids) for ids in plan.values())
+        if not total:
+            print(f"Run {args.run_id} added no labels; nothing to undo.")
+            return 0
+        if not args.yes:
+            for name in sorted(plan):
+                print(f"  {len(plan[name]):6d}  {name}")
+            print(f"{total} messages would have labels removed.")
+            print("Dry run; nothing was written. Re-run with --yes.")
+            return 0
+        # undo reads only the local log, so it needs no config.
+        client = _open_client(None, args.db)
+        stats = undo_run(client, store, args.run_id, dry_run=False)
+
+    print(f"removed {stats.undone} of {stats.messages} labels"
+          f" across {stats.labels} labels")
+    if stats.skipped_missing:
+        print(f"  {stats.skipped_missing} could not be changed")
+    return 0
+
+
 def _save_decision(
     store: Store,
     message_id: str,
@@ -519,11 +619,12 @@ def _stats(counters: Counter) -> ClassifyStats:
     )
 
 
-def _open_client(cfg: Config, db_path: str) -> GmailClient:
+def _open_client(cfg: Config | None, db_path: str) -> GmailClient:
     """OAuth the first time, reuse token.json afterwards.
 
-    Deliberately thin: every test replaces this function, and the live smoke
-    test is what exercises it.
+    `cfg` may be None (undo, which never fetches a message body); it is only
+    consulted for the excerpt length. Deliberately thin: every test replaces
+    this function, and the live smoke test is what exercises it.
     """
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
@@ -563,7 +664,7 @@ def _open_client(cfg: Config, db_path: str) -> GmailClient:
         httpx.Client(timeout=60.0),
         credentials.token,
         token_refresher=refresh,
-        excerpt_chars=cfg.excerpt_chars,
+        excerpt_chars=cfg.excerpt_chars if cfg else DEFAULT_EXCERPT_CHARS,
     )
 
 
