@@ -284,7 +284,7 @@ def msg(**kw):
     return SimpleNamespace(**base)
 
 def test_clean_message_passes():
-    assert violation(msg(), user_label_ids=frozenset({"Label_1"}),
+    assert violation(msg(label_ids=("INBOX",)), user_label_ids=frozenset({"Label_1"}),
                      min_size_bytes=LIMIT) is None
 
 def test_starred_is_rejected():
