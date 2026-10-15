@@ -740,7 +740,7 @@ Expected: FAIL — `ImportError: cannot import name 'TokenBucket'`
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `pytest tests/test_ratelimit.py tests/test_rest_client.py -v`
-Expected: PASS, 14 tests.
+Expected: PASS, 24 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1353,7 +1353,7 @@ Expected: PASS, 8 tests.
 - [ ] **Step 5: Run the whole suite**
 
 Run: `pytest -q`
-Expected: PASS, 101 tests, no failures.
+Expected: PASS, 110 tests, no failures.
 
 - [ ] **Step 6: Commit**
 
