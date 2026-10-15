@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: gmail-sort
-Version: 0.1.0
-Summary: Label a large Gmail backlog with rules plus an LLM fallback
-Requires-Python: >=3.11
-Requires-Dist: httpx>=0.27
-Requires-Dist: google-auth-oauthlib>=1.2

@@ -9,3 +9,4 @@ __pycache__/
 client_secret.json
 token.json
 config.toml
+*.egg-info/
