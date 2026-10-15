@@ -157,8 +157,8 @@ labels = [
 ]
 
 # First match wins, lowest priority number first. Every rule must name an
-# active taxonomy label. A rule matches if any listed field matches; at least
-# one field must be present.
+# active taxonomy label. Every match field present on a rule must match
+# (fields are ANDed), and at least one field must be present.
 [[rules]]
 name = "ci-notifications"
 priority = 10

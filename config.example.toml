@@ -1,0 +1,36 @@
+[candidates]
+# Guarded mail is never listed, never fetched and never paid for.
+#   has:nouserlabels  leave mail you have already sorted alone
+#   -is:starred       never touch starred mail
+#   -is:important     never touch Important mail
+#   -larger:5M        never touch mail with a large attachment
+query = "has:nouserlabels -is:starred -is:important -larger:5M"
+
+[fetch]
+# Body excerpt length cached for LLM classification, in characters.
+excerpt_chars = 2000
+# Cache truncated bodies so re-tuning rules and prompts makes no API calls.
+store_bodies = true
+
+[llm]
+provider = "anthropic"          # anthropic | openai
+model = "claude-haiku-4-5"
+max_messages_per_run = 0        # 0 = unlimited; positive value caps LLM spend
+
+[taxonomy]
+# Active labels. classify may only assign one of these.
+labels = [
+  "Newsletters",
+  "Receipts",
+  "Notifications/CI",
+  "Notifications/Social",
+]
+
+# First match wins, lowest priority number first. Every rule must name an
+# active taxonomy label. Every match field present on a rule must match
+# (fields are ANDed), and at least one field must be present.
+[[rules]]
+name = "ci-notifications"
+priority = 10
+label = "Notifications/CI"
+from_domain = ["github.com", "gitlab.com", "circleci.com"]

@@ -98,7 +98,13 @@ def test_rule_naming_unknown_label_is_rejected(tmp_path):
         load_config(write(tmp_path, bad))
 
 def test_duplicate_rule_names_are_rejected(tmp_path):
-    dup = MINIMAL + MINIMAL.split("[[rules]]")[1]
+    dup = MINIMAL + """
+[[rules]]
+name = "newsletters"
+priority = 20
+label = "Receipts"
+list_id = "other.example.com"
+"""
     with pytest.raises(ConfigError, match="duplicate rule name"):
         load_config(write(tmp_path, dup))
 
