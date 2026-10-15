@@ -25,17 +25,24 @@ batch_size = 50
 # --- Using a model served on your own machine -------------------------------
 # `provider = "openai"` means "the OpenAI wire format", not the company. These
 # all speak it: llama.cpp's llama-server, Unsloth Studio, LM Studio, Ollama,
-# vLLM. Point base_url at the server; api_key_env = "" sends no auth header.
+# vLLM. Point base_url at the server, and name the variable holding its key
+# (api_key_env = "" for a server that needs none).
 #
 #   provider = "openai"
-#   model = "Qwen3.8-2B"                     # must match the id /v1/models reports
+#   model = "unsloth/gemma-4-E4B-it-GGUF"    # must match the id /v1/models reports
 #   base_url = "http://192.168.1.154:8080/v1"
-#   api_key_env = ""
-#   batch_size = 6                           # fits an 8k context comfortably
+#   api_key_env = "UNSLOTH_API_KEY"
+#   batch_size = 50
 #
-# And under [fetch] above, excerpt_chars = 600 pairs well with batch_size = 6.
-# Check the exact model id once the server is up:
-#   curl http://192.168.1.154:8080/v1/models
+# And under [fetch] above, excerpt_chars = 600 pairs well with batch_size = 50.
+# Check the id, and that the key is required:
+#   curl -H "Authorization: Bearer $UNSLOTH_API_KEY" \
+#     http://192.168.1.154:8080/v1/models
+#
+# batch_size has a ceiling: per-request overhead makes larger batches faster,
+# but a model loses track of positions past a certain size and starts emitting
+# labels for the wrong messages. Measure yours before trusting a big number;
+# 50 is a sane start for a large context, 4-6 for a 4096-token one.
 
 [taxonomy]
 # Active labels. classify may only assign one of these.

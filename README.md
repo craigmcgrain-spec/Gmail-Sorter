@@ -151,10 +151,10 @@ Start your server, then point the config at it:
 ```toml
 [llm]
 provider = "openai"
-model = "Qwen3.8-2B"                      # must match the id the server reports
+model = "unsloth/gemma-4-E4B-it-GGUF"     # must match the id /v1/models reports
 base_url = "http://192.168.1.154:8080/v1"
-api_key_env = ""                          # sends no Authorization header
-batch_size = 6
+api_key_env = "UNSLOTH_API_KEY"           # "" sends no Authorization header
+batch_size = 50
 
 [fetch]
 excerpt_chars = 600
@@ -173,29 +173,43 @@ another machine — pass `--host 0.0.0.0` and a port of your choosing. For llama
 llama-server -m /path/to/model.gguf -c 8192 --port 8080
 ```
 
-Once it is up, confirm the model id and that it ignores the missing key:
+Once it is up, confirm the model id — and note that a server with a key returns 401
+without one:
 
 ```bash
-curl http://192.168.1.154:8080/v1/models
+curl -H "Authorization: Bearer $UNSLOTH_API_KEY" http://192.168.1.154:8080/v1/models
 ```
 
-**Setting `batch_size` correctly is not optional.** A request with 50 messages and
-2000-character excerpts is roughly 30,000 tokens of prompt. `llama-server` defaults to a
-**4096-token context**, so that request fails outright rather than degrading. Budget for
-prompt + reply: `batch_size × (excerpt_chars / 4 + 60) < context`. With a 4096-token
-window, `batch_size = 4` and `excerpt_chars = 400` is a safe starting point; with 8192,
-`batch_size = 6` and `excerpt_chars = 600`. Raise the server's context with `-c` if you
-want larger batches.
+**`batch_size` is the one knob worth tuning, and it has a ceiling.** Per-request overhead
+dominates, so larger batches are *faster*, not slower — but a model can only track so many
+positions before it starts emitting labels for the wrong messages. Measured on
+`unsloth/gemma-4-E4B-it-GGUF`, 100 messages with known answers, `excerpt_chars = 600`,
+CPU inference:
+
+| `batch_size` | time | per message | correct | wrong | unsorted |
+|---|---|---|---|---|---|
+| 25 | 67.3 s | 673 ms | 100 | 0 | 0 |
+| 50 | 53.8 s | **538 ms** | 100 | 0 | 0 |
+| 100 | 41.7 s | 417 ms | 63 | **20** | 17 |
+
+At 100 the model loses track of positions: 20 messages got a confidently wrong label. So
+**measure your own model's ceiling before trusting a large batch**, and stop well short of
+it. Starting points: `batch_size = 50` when the server reports a large context, and around
+`4`–`6` when it reports a small one (`llama-server` defaults to **4096**, where even 50
+short messages will overflow — budget `batch_size × (excerpt_chars / 4 + 60) < context`).
 
 Two things to expect from a small local model:
 
-- **It will under-label, not mislabel.** A reply is accepted only if it exactly matches a
-  label you approved; malformed JSON, invented labels and prose all become `UNSORTED`. So
-  a weak model leaves messages unlabelled — it cannot file them wrongly. Lean on rules,
-  which cost nothing, and keep the taxonomy small: 5–10 labels, not 25.
-- **It is slow.** CPU-only inference on a 2B model runs roughly 20–40 s per request, so
-  20,000 LLM-bound messages is on the order of a day, against ~3.9 h on a hosted API.
-  `classify` is resumable, so `--limit` lets you work through it over several runs.
+- **The labels are always ones you approved, and always in the right order — but they can
+  still be the wrong label.** Anything unparseable, misaligned or outside the taxonomy
+  becomes `UNSORTED`, so a weak model cannot invent a label or file one message as another.
+  It can, however, pick the wrong *valid* label, and it does so sharply once the batch
+  exceeds what it can track (see the table above). Lean on rules, which are free and exact,
+  and keep the taxonomy small: 5–10 labels, not 25.
+- **Local can be fast enough to be worth it.** The measurements above are ~0.5 s per
+  message, so 20,000 LLM-bound messages is roughly 3 hours against ~3.9 h on a hosted API —
+  a small model on a good CPU beats the wait, though not the quality. `classify` is
+  resumable, so `--limit` lets you work through it over several runs.
 
 ## Timing and cost
 
