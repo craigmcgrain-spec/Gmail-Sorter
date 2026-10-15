@@ -93,6 +93,15 @@ def test_open_client_names_a_missing_client_secret(tmp_path):
         _open_client(cfg(), str(tmp_path / "d.sqlite"))
 
 
+def test_open_client_reports_where_the_secret_should_go(tmp_path, monkeypatch):
+    # "not found at client_secret.json" tells a new user nothing; the first
+    # error they ever see must name a directory they can act on.
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ConfigError) as excinfo:
+        _open_client(cfg(), "gmail-sort.sqlite")
+    assert str(tmp_path.resolve()) in str(excinfo.value)
+
+
 def test_cli_survey_runs_before_a_config_exists(tmp_path, monkeypatch):
     # The whole point of survey is to help produce a config, so it must not
     # require one. Without this the documented first command fails.

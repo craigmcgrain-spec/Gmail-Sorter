@@ -32,6 +32,12 @@ Requires Python 3.11+.
 python -m venv .venv && .venv/bin/pip install -e .
 ```
 
+Optionally, to run the test suite (135 tests, no network or credentials needed):
+
+```bash
+.venv/bin/pip install -e ".[dev]" && .venv/bin/python -m pytest -q
+```
+
 Then create an OAuth client, once:
 
 1. Create a Google Cloud project and enable the **Gmail API**.

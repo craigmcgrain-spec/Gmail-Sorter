@@ -12,6 +12,10 @@ dependencies = [
   "google-auth-oauthlib>=1.2",
 ]
 
+[project.optional-dependencies]
+# Only needed to run the test suite.
+dev = ["pytest>=8"]
+
 [project.scripts]
 gmail-sort = "gmail_sort.cli:main"
 

@@ -683,7 +683,9 @@ def _open_client(cfg: Config | None, db_path: str) -> GmailClient:
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    directory = Path(db_path).parent
+    # Resolved so the "put it there" instruction names a real directory, even
+    # when --db was given as a relative path.
+    directory = Path(db_path).resolve().parent
     token_path = directory / "token.json"
     secret_path = directory / "client_secret.json"
 
