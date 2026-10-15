@@ -26,6 +26,26 @@ _SIZE_SUFFIXES = {"K": 1024, "M": 1024**2, "G": 1024**3}
 
 _MATCH_FIELDS = ("from_domain", "from_re", "subject_re", "list_id", "category")
 
+# Gmail's own labels. Adding one of these to a message changes the message
+# rather than filing it, so they are reserved and guarded against.
+SYSTEM_LABEL_IDS = frozenset(
+    {
+        "INBOX",
+        "UNREAD",
+        "STARRED",
+        "IMPORTANT",
+        "SENT",
+        "DRAFT",
+        "SPAM",
+        "TRASH",
+        "CATEGORY_PERSONAL",
+        "CATEGORY_SOCIAL",
+        "CATEGORY_PROMOTIONS",
+        "CATEGORY_UPDATES",
+        "CATEGORY_FORUMS",
+    }
+)
+
 
 class ConfigError(ValueError):
     """Raised for any invalid configuration value."""
@@ -115,6 +135,7 @@ def load_config(path: str | Path) -> Config:
             "taxonomy.labels is empty — no label can ever be applied. "
             "Uncomment the [taxonomy] block in your config."
         )
+    _reject_reserved_labels(labels)
 
     rules = tuple(_load_rules(raw.get("rules", ()), labels))
 
@@ -130,6 +151,23 @@ def load_config(path: str | Path) -> Config:
         labels=labels,
         rules=rules,
     )
+
+
+def _reject_reserved_labels(labels: tuple[str, ...]) -> None:
+    """Refuse a taxonomy label that is really one of Gmail's own labels.
+
+    A label named `TRASH` resolves to Gmail's Trash label id, so applying it
+    moves mail to Trash; `INBOX` and `UNREAD` change Inbox and read state; and
+    `STARRED`/`IMPORTANT` would add the very states this tool refuses to touch.
+    """
+    for label in labels:
+        stripped = label.strip()
+        if stripped.upper() in SYSTEM_LABEL_IDS:
+            raise ConfigError(
+                f"taxonomy.labels contains the reserved Gmail system label "
+                f"{stripped!r}. Adding it would change the message itself rather "
+                f"than file it — rename it, for example {stripped.title() + ' Mail'!r}."
+            )
 
 
 def _load_rules(raw_rules: Iterable[dict], labels: tuple[str, ...]) -> list[Rule]:

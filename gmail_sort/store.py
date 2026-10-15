@@ -248,6 +248,19 @@ class Store:
         ):
             yield (found["message_id"], found["label"], found["action"])
 
+    def drop_change(self, run_id: int, message_id: str, label: str) -> None:
+        """Forget one logged add.
+
+        Called when the final write for an id failed: without it the pair would
+        look applied, and a later run would never retry it.
+        """
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM run_messages WHERE run_id = ? AND message_id = ?"
+                " AND label = ? AND action = 'add'",
+                (run_id, message_id, label),
+            )
+
     def applied_pairs(self) -> set[tuple[str, str]]:
         """(message_id, label) pairs applied and not since undone.
 

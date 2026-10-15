@@ -75,9 +75,9 @@ $EDITOR config.toml
 .venv/bin/python -m gmail_sort undo 1 --yes
 ```
 
-Re-running `classify` costs nothing: decisions and message bodies are cached and keyed
-by a hash of your taxonomy, rules, prompt and model. Edit a rule and only messages whose
-decision actually changed are re-examined.
+Re-running `classify` costs nothing: decisions and message bodies are cached and keyed by
+a hash of your taxonomy, rules, prompt and model. Edit a rule and only messages whose
+decision actually changed are re-examined — from the local cache, without refetching.
 
 ## Configuration
 
@@ -156,8 +156,8 @@ Useful flags: `classify --limit N` caps messages sent to the LLM this run;
   `token.json` and re-run.
 - **`client_secret.json not found at ...`** — it lives next to the database, not next to
   the config.
-- **`429`** — expected under load; the client paces itself and backs off. A persistent
-  one means another run is using the same quota.
+- **`429`, or `403 userRateLimitExceeded`** — expected under load; the client paces itself
+  and backs off. A persistent one means another run is using the same quota.
 - **Nothing was labelled** — check the taxonomy block is uncommented and each rule names
   an active label. `apply` prints how many messages each guard rejected.
 - **A thread looks partly labelled** — Gmail's UI is thread-oriented; this labels
@@ -165,6 +165,15 @@ Useful flags: `classify --limit N` caps messages sent to the LLM this run;
 
 ## Caveats
 
+- **Guards are enforced against the mailbox as it was when each message was
+  classified.** If you star a message, mark it Important or label it by hand *after*
+  `classify` has decided it, `apply` will still label it — and re-running `classify` will
+  not notice either, because a decided message is never refetched (that caching is what
+  makes re-tuning free). To force a fresh look at the guards, delete the database and
+  re-classify.
+- **A label named like one of Gmail's own labels is rejected at load.** `TRASH`, `SPAM`,
+  `INBOX`, `UNREAD`, `STARRED`, `IMPORTANT` and the `CATEGORY_*` names would change the
+  message rather than file it, so pick another name.
 - **`undo` removes the label even if you added it by hand afterwards.** It reverses the
   exact message/label pairs that run logged.
 - Nested labels are created with `labelListVisibility: labelShow`; a label hidden from

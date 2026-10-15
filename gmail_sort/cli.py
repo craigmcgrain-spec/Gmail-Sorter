@@ -18,7 +18,12 @@ import httpx
 
 from gmail_sort import rules
 from gmail_sort.config import Config, ConfigError, classifier_version, load_config
-from gmail_sort.gmail import GmailClient, RestGmailClient, chunked
+from gmail_sort.gmail import (
+    GmailClient,
+    PermanentRequestError,
+    RestGmailClient,
+    chunked,
+)
 from gmail_sort.guards import SYSTEM_LABEL_IDS, guard_query, user_label_ids, violation
 from gmail_sort.llm import PROMPT_TEMPLATE, Classifier, estimate, make_classifier
 from gmail_sort.store import Decision, MessageRow, Store, now
@@ -105,11 +110,16 @@ def classify(
     pending: list[MessageRow] = []
 
     for message_id in client.iter_message_ids(guard_query(cfg)):
-        if store.get_decision(message_id, version) is not None:
+        decision = store.get_decision(message_id, version)
+        if decision is not None and _is_settled(decision, llm):
             counters["cached"] += 1
             continue
 
-        message = client.get_message(message_id)
+        # Reuse the stored row, and its cached body, instead of paying 20 quota
+        # units again. This is what makes re-tuning a rule cost no API calls.
+        message = store.get_message(message_id)
+        if message is None:
+            message = client.get_message(message_id)
         reason = violation(
             message,
             user_label_ids=known_user_labels,
@@ -143,8 +153,14 @@ def classify(
             counters["unsorted"] += 1
         return _stats(counters)
 
-    for chunk in chunked(pending[:limit] if limit is not None else pending,
-                         LLM_BATCH_SIZE):
+    # The config's spend cap applies unless the command line overrides it.
+    effective_limit = (
+        limit if limit is not None else (cfg.max_messages_per_run or None)
+    )
+    for chunk in chunked(
+        pending[:effective_limit] if effective_limit is not None else pending,
+        LLM_BATCH_SIZE,
+    ):
         bodies: list[MessageRow] = []
         for message in chunk:
             body = message
@@ -201,7 +217,9 @@ def apply_plan(
     """
     existing = client.list_labels()
     known_user_labels = user_label_ids(existing)
-    by_name = {label.name: label for label in existing}
+    # Only user labels resolve by name. A taxonomy entry spelled like a system
+    # label must never resolve to it, or "TRASH" would mean "delete this".
+    by_name = {label.name: label for label in existing if label.type == "user"}
 
     counters: Counter[str] = Counter()
     remaining = limit
@@ -247,13 +265,20 @@ def apply_plan(
             try:
                 client.batch_modify(chunk, add=[label.id])
                 counters["applied"] += len(chunk)
-            except Exception:
-                # One stale id must not abort a run over 50,000 messages.
+            except PermanentRequestError:
+                # At least one id is unacceptable (deleted since classify).
+                # Narrow to one id at a time so a single stale id cannot abort a
+                # run over 50,000 messages. Every other failure propagates: a
+                # 403 or a transport error must fail the run loudly rather than
+                # be counted as "no longer exists" and exit 0.
                 for message_id in chunk:
                     try:
                         client.batch_modify([message_id], add=[label.id])
                         counters["applied"] += 1
-                    except Exception:
+                    except PermanentRequestError:
+                        # Undo the pre-call log row, so a later run retries it
+                        # instead of treating the pair as already applied.
+                        store.drop_change(run_id, message_id, name)
                         counters["skipped_missing"] += 1
 
     return ApplyStats(
@@ -285,7 +310,10 @@ def undo_run(
     the run, undo removes it too.
     """
     plan = plan_undo(store, run_id)
-    by_name = {label.name: label for label in client.list_labels()}
+    # Only user labels resolve by name; a system label must never be touched.
+    by_name = {
+        label.name: label for label in client.list_labels() if label.type == "user"
+    }
 
     counters: Counter[str] = Counter()
     for name, message_ids in plan.items():
@@ -305,12 +333,12 @@ def undo_run(
             try:
                 client.batch_modify(chunk, remove=[label.id])
                 counters["undone"] += len(chunk)
-            except Exception:
+            except PermanentRequestError:
                 for message_id in chunk:
                     try:
                         client.batch_modify([message_id], remove=[label.id])
                         counters["undone"] += 1
-                    except Exception:
+                    except PermanentRequestError:
                         counters["skipped_missing"] += 1
 
     return UndoStats(
@@ -319,6 +347,19 @@ def undo_run(
         undone=counters["undone"],
         skipped_missing=counters["skipped_missing"],
     )
+
+
+def _is_settled(decision: Decision, llm: Classifier | None) -> bool:
+    """Whether this cached decision is final for the run at hand.
+
+    `classify --no-llm` records leftovers as `(source="rule", label=None)` so a
+    repeat rules-only run stays free, but that placeholder is not a decision:
+    a run with an LLM must re-examine it, or `--no-llm` would silently poison
+    every later run.
+    """
+    if decision.label is not None:
+        return True
+    return decision.source == "llm" or llm is None
 
 
 def survey(

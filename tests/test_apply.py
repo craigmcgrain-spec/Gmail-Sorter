@@ -94,13 +94,70 @@ def test_unsorted_decisions_are_not_planned(tmp_path):
 
 
 def test_changes_are_logged_before_the_call(tmp_path):
+    # Crash safety: the log row must exist by the time the write is attempted.
+    with Store(tmp_path / "d.sqlite") as s:
+        seed_decision(s, "m1", "Receipts")
+        fake = FakeGmailClient({"m1": row("m1")})
+        rid = s.start_run("apply", dry_run=False, config_hash="h")
+        seen_at_call = []
+        original = fake.batch_modify
+
+        def spy(ids, *, add=(), remove=()):
+            seen_at_call.append(list(s.iter_changes(rid)))
+            return original(ids, add=add, remove=remove)
+
+        fake.batch_modify = spy
+        apply_plan(fake, s, cfg(), plan_apply(s, cfg(), version="v"),
+                   dry_run=False, run_id=rid)
+    assert seen_at_call == [[("m1", "Receipts", "add")]]
+
+
+def test_a_system_label_is_never_resolved_by_name(tmp_path):
+    # Defence in depth beyond the config check: even if a plan names a system
+    # label, apply must not write that label's id.
+    with Store(tmp_path / "d.sqlite") as s:
+        seed_decision(s, "m1", "TRASH")
+        fake = FakeGmailClient({"m1": row("m1")},
+                               label_ids=[{"id": "TRASH", "name": "TRASH",
+                                           "type": "system"}])
+        rid = s.start_run("apply", dry_run=False, config_hash="h")
+        apply_plan(fake, s, cfg(labels=("TRASH",)), {"TRASH": ["m1"]},
+                   dry_run=False, run_id=rid)
+    for _message, add, _remove in fake.modified:
+        assert "TRASH" not in add, fake.modified
+
+
+def test_a_non_permanent_failure_fails_the_run(tmp_path):
+    class PermissionDenied(Exception):
+        pass
+
+    with Store(tmp_path / "d.sqlite") as s:
+        seed_decision(s, "m1", "Receipts")
+        fake = FakeGmailClient({"m1": row("m1")})
+
+        def explode(*args, **kwargs):
+            raise PermissionDenied("403 insufficient permissions")
+
+        fake.batch_modify = explode
+        rid = s.start_run("apply", dry_run=False, config_hash="h")
+        with pytest.raises(PermissionDenied):
+            apply_plan(fake, s, cfg(), plan_apply(s, cfg(), version="v"),
+                       dry_run=False, run_id=rid)
+
+
+def test_a_failed_write_is_not_left_marked_applied(tmp_path):
+    # If the final write for an id failed, a re-run must retry it rather than
+    # treat it as done because it was logged.
     with Store(tmp_path / "d.sqlite") as s:
         seed_decision(s, "m1", "Receipts")
         fake = FakeGmailClient({"m1": row("m1")}, fail_on={"m1"})
         rid = s.start_run("apply", dry_run=False, config_hash="h")
-        apply_plan(fake, s, cfg(), plan_apply(s, cfg(), version="v"),
-                   dry_run=False, run_id=rid)
-        assert list(s.iter_changes(rid)) == [("m1", "Receipts", "add")]
+        stats = apply_plan(fake, s, cfg(), plan_apply(s, cfg(), version="v"),
+                           dry_run=False, run_id=rid)
+        assert stats.skipped_missing == 1
+        assert s.applied_pairs() == set()
+        fake.fail_on = set()
+        assert plan_apply(s, cfg(), version="v") == {"Receipts": ["m1"]}
 
 
 def test_missing_label_is_created_once_and_reused(tmp_path):

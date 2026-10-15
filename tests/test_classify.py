@@ -113,3 +113,50 @@ def test_cli_estimate_needs_no_api_key(tmp_path, monkeypatch):
         {"m1": row("m1", from_domain="github.com")}))
     assert cli.main(["classify", "--config", str(write_cfg(tmp_path)),
                      "--db", str(tmp_path / "d.sqlite"), "--estimate"]) == 0
+
+
+def test_no_llm_placeholders_do_not_block_a_later_llm_run(tmp_path, llm_returning):
+    # --no-llm says "leave the rest undecided"; a later LLM run must honour that.
+    msgs = {"m1": row("m1", from_domain="unknown.com")}
+    with Store(tmp_path / "d.sqlite") as s:
+        classify(FakeGmailClient(msgs), cfg(), s, llm=None)
+        stats = classify(FakeGmailClient(msgs), cfg(), s,
+                         llm=llm_returning(["Receipts"]))
+    assert stats.llm_calls == 1
+    assert stats.llm_matched == 1
+
+
+def test_a_rules_only_rerun_is_still_free(tmp_path):
+    msgs = {"m1": row("m1", from_domain="unknown.com")}
+    with Store(tmp_path / "d.sqlite") as s:
+        classify(FakeGmailClient(msgs), cfg(), s, llm=None)
+        stats = classify(FakeGmailClient(msgs), cfg(), s, llm=None)
+    assert stats.cached == 1
+    assert stats.llm_calls == 0
+
+
+def test_a_version_change_reuses_stored_rows_without_refetching(tmp_path,
+                                                                llm_returning):
+    # The whole point of caching bodies: re-tuning a rule must cost no API calls.
+    msgs = {"m1": row("m1", from_domain="unknown.com"),
+            "m2": row("m2", from_domain="another.example")}
+    with Store(tmp_path / "d.sqlite") as s:
+        classify(FakeGmailClient(msgs), cfg(), s, llm=llm_returning(["Receipts"]))
+        fake2 = FakeGmailClient(msgs)
+        classify(fake2, cfg_with_extra_rule(), s, llm=llm_returning(["Receipts"]))
+    assert [c for c in fake2.calls if c[0] == "get_message"] == []
+
+
+def test_max_messages_per_run_caps_what_reaches_the_llm(tmp_path):
+    msgs = {f"m{i}": row(f"m{i}", from_domain="unknown.com") for i in range(5)}
+    sent = []
+
+    class Recorder:
+        def classify(self, batch, labels):
+            sent.extend(message.id for message in batch)
+            return [None] * len(batch)
+
+    with Store(tmp_path / "d.sqlite") as s:
+        classify(FakeGmailClient(msgs), cfg(max_messages_per_run=2), s,
+                 llm=Recorder())
+    assert sent == ["m0", "m1"], sent

@@ -41,6 +41,16 @@ class Label:
     type: str
 
 
+class PermanentRequestError(Exception):
+    """A 400/404: this request will never succeed, so retrying is pointless.
+
+    For `batch_modify` it means at least one id in the batch is unacceptable;
+    the caller may narrow to a single id and retry that. Every other failure
+    (403, 429, 5xx, transport) is retried or propagates, so a run never reports
+    success for writes that did not happen.
+    """
+
+
 def chunked(items: Sequence, size: int) -> Iterator[list]:
     """Split into consecutive lists of at most `size` items."""
     materialised = list(items)
@@ -235,7 +245,14 @@ class RestGmailClient:
                 self._token = self._token_refresher()
                 attempt -= 1
                 continue
-            if response.status_code == 429 or response.status_code >= 500:
+            if response.status_code in (400, 404):
+                # Never retryable, and never worth a per-id fallback for
+                # anything but a message-specific call.
+                raise PermanentRequestError(
+                    f"{method} {path} -> {response.status_code}"
+                )
+            if response.status_code in (403, 429) or response.status_code >= 500:
+                # 403 is where Gmail reports userRateLimitExceeded.
                 if attempt >= MAX_ATTEMPTS:
                     response.raise_for_status()
                 self._sleep(min(MAX_BACKOFF_SECONDS, 2.0 ** (attempt - 1)))

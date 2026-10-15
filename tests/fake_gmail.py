@@ -7,9 +7,10 @@ caller cannot tell them apart.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from typing import Iterator, Sequence
 
-from gmail_sort.gmail import Label, chunked
+from gmail_sort.gmail import Label, PermanentRequestError, chunked
 from gmail_sort.store import MessageRow
 
 
@@ -50,7 +51,12 @@ class FakeGmailClient:
         self.calls.append(("get_message", (message_id,), {"full": full}))
         if message_id in self.fail_on:
             raise KeyError(f"no such message: {message_id}")
-        return self.messages[message_id]
+        message = self.messages[message_id]
+        if full and message.excerpt is None:
+            # A real full fetch returns a body; without one here the caching
+            # path would look broken for the wrong reason.
+            return replace(message, excerpt=f"{message.subject} body text")
+        return message
 
     def list_labels(self) -> list[Label]:
         self.calls.append(("list_labels", (), {}))
@@ -59,7 +65,9 @@ class FakeGmailClient:
     def create_label(self, name: str) -> Label:
         self.calls.append(("create_label", (name,), {}))
         for label in self.label_ids:
-            if label.name == name:
+            # Only a user label can satisfy a name lookup; Gmail never returns
+            # one of its own system labels from labels.create.
+            if label.name == name and label.type == "user":
                 return label
         label = Label(id=self._free_label_id(), name=name, type="user")
         self.label_ids.append(label)
@@ -79,7 +87,9 @@ class FakeGmailClient:
             )
             for message_id in chunk:
                 if message_id in self.fail_on:
-                    raise RuntimeError(f"message no longer exists: {message_id}")
+                    raise PermanentRequestError(
+                        f"message no longer exists: {message_id}"
+                    )
             for message_id in chunk:
                 self.modified.append((message_id, tuple(add), tuple(remove)))
 

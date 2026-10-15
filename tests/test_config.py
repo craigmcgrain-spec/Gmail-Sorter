@@ -79,3 +79,13 @@ def test_classifier_version_is_stable_and_sensitive():
         (["A"], (), "prompt", "other-model"),
     ]):
         assert classifier_version(*changed) != classifier_version(*args), i
+
+def test_taxonomy_label_named_like_a_gmail_system_label_is_rejected(tmp_path):
+    # A label called TRASH resolves to Gmail's own Trash label id, so adding it
+    # would move mail to Trash. SPAM, INBOX and UNREAD are equally destructive
+    # or state-changing, and STARRED/IMPORTANT would invert the guards.
+    for reserved in ("TRASH", "SPAM", "INBOX", "UNREAD", "Important", "Starred"):
+        bad = MINIMAL.replace('labels = ["Newsletters", "Receipts"]',
+                              f'labels = ["Newsletters", "Receipts", "{reserved}"]')
+        with pytest.raises(ConfigError, match="reserved"):
+            load_config(write(tmp_path, bad))

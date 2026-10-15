@@ -1,0 +1,2 @@
+[console_scripts]
+gmail-sort = gmail_sort.cli:main

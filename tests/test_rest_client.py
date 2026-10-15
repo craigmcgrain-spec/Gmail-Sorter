@@ -3,7 +3,8 @@ import base64
 import httpx
 import pytest
 
-from gmail_sort.gmail import RestGmailClient, TokenBucket, parse_message
+from gmail_sort.gmail import (PermanentRequestError, RestGmailClient, TokenBucket,
+                              parse_message)
 
 
 def client(handler, **kw):
@@ -201,6 +202,43 @@ def test_parse_message_survives_undecodable_body():
                "payload": {"headers": [], "mimeType": "text/plain",
                            "body": {"data": "!!!not base64!!!"}}}
     assert parse_message(payload, full=True, excerpt_chars=2000).excerpt is None
+
+
+def test_retries_on_403_rate_limit_exceeded():
+    # Gmail reports userRateLimitExceeded as 403, not 429.
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(403, json={"error": {"errors": [
+                {"reason": "userRateLimitExceeded"}]}})
+        return httpx.Response(200, json={"labels": []})
+
+    gmail = client(handler)
+    gmail._sleep = lambda seconds: None
+    assert gmail.list_labels() == []
+    assert calls["n"] == 2
+
+
+def test_a_404_raises_a_permanent_error_without_retrying():
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(404, json={"error": {"code": 404}})
+
+    gmail = client(handler)
+    gmail._sleep = lambda seconds: None
+    with pytest.raises(PermanentRequestError):
+        gmail.get_message("gone")
+    assert calls["n"] == 1
+
+
+def test_a_batch_containing_a_dead_id_raises_a_permanent_error():
+    gmail = client(lambda request: httpx.Response(400, json={"error": {"code": 400}}))
+    with pytest.raises(PermanentRequestError):
+        gmail.batch_modify(["m1"], add=["Label_1"])
 
 
 def test_parse_message_takes_the_first_category_label():

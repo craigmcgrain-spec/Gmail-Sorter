@@ -10,25 +10,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from gmail_sort.config import Config
-
-SYSTEM_LABEL_IDS = frozenset(
-    {
-        "INBOX",
-        "UNREAD",
-        "STARRED",
-        "IMPORTANT",
-        "SENT",
-        "DRAFT",
-        "SPAM",
-        "TRASH",
-        "CATEGORY_PERSONAL",
-        "CATEGORY_SOCIAL",
-        "CATEGORY_PROMOTIONS",
-        "CATEGORY_UPDATES",
-        "CATEGORY_FORUMS",
-    }
-)
+from gmail_sort.config import Config, SYSTEM_LABEL_IDS
 
 
 def guard_query(cfg: Config) -> str:
