@@ -1,0 +1,11 @@
+.venv/
+.superpowers/
+__pycache__/
+*.pyc
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.pytest_cache/
+client_secret.json
+token.json
+config.toml
