@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import httpx
 
 from gmail_sort import rules
 from gmail_sort.config import (
+    ACCOUNT_ENV,
     Config,
     ConfigError,
     classifier_version,
@@ -530,6 +532,13 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--db", default=DEFAULT_DB)
 
 
+def expected_account(cfg: Config | None) -> str | None:
+    """The address this run is allowed to act on, from config or environment."""
+    if cfg is not None and cfg.account:
+        return cfg.account
+    return os.environ.get(ACCOUNT_ENV) or None
+
+
 def _survey_command(args) -> int:
     # Survey exists to help produce a config, so it must run without one.
     config_path = Path(args.config)
@@ -539,6 +548,9 @@ def _survey_command(args) -> int:
         cfg = default_config()
         print(f"No {config_path} yet — surveying with the default guards.")
     client = _open_client(cfg, args.db)
+    acting_as = verify_account(client, expected_account(cfg))
+    if acting_as:
+        print(f"Acting on {acting_as}.")
     result = survey(client, cfg, top=args.top, sample=args.sample)
     out = Path(args.out)
     out.write_text(render_proposal(result, cfg, top=args.top))
@@ -556,6 +568,7 @@ def _classify_command(args) -> int:
     cfg = load_config(args.config)
     with Store(args.db) as store:
         client = _open_client(cfg, args.db)
+        verify_account(client, expected_account(cfg))
         if args.estimate:
             stats = classify(client, cfg, store, dry_run=True)
             would_ask = stats.candidates - stats.rule_matched
@@ -586,6 +599,7 @@ def _apply_command(args) -> int:
             return 0
 
         client = _open_client(cfg, args.db)
+        acting_as = verify_account(client, expected_account(cfg))
         run_id = store.start_run("apply", dry_run=not args.yes, config_hash=version)
         stats = apply_plan(
             client, store, cfg, plan,
@@ -629,6 +643,7 @@ def _undo_command(args) -> int:
             return 0
         # undo reads only the local log, so it needs no config.
         client = _open_client(None, args.db)
+        verify_account(client, expected_account(None))
         stats = undo_run(client, store, args.run_id, dry_run=False)
 
     print(f"removed {stats.undone} of {stats.messages} labels"
@@ -672,6 +687,22 @@ def _stats(counters: Counter) -> ClassifyStats:
     )
 
 
+def verify_account(client: GmailClient, expected: str | None) -> str:
+    """The authenticated address; refuses a mailbox we were not pointed at.
+
+    OAuth consent can silently land on a different signed-in Google account, and
+    this tool writes labels — doing that to the wrong mailbox is quiet and
+    tedious to undo.
+    """
+    actual = client.get_profile()
+    if expected and actual and actual.lower() != expected.lower():
+        raise ConfigError(
+            f"authenticated as {actual!r} but the config says {expected!r}. "
+            "Re-run and pick the right account, or fix [gmail] account."
+        )
+    return actual
+
+
 def _open_client(cfg: Config | None, db_path: str) -> GmailClient:
     """OAuth the first time, reuse token.json afterwards.
 
@@ -706,7 +737,12 @@ def _open_client(cfg: Config | None, db_path: str) -> GmailClient:
                     "and put it there. See README.md."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(str(secret_path), [SCOPE])
-            credentials = flow.run_local_server(port=0)
+            # login_hint pre-selects the account at the consent screen, which
+            # matters when several Google accounts are signed in.
+            hint = cfg.account if cfg else None
+            credentials = flow.run_local_server(
+                port=0, **({"login_hint": hint} if hint else {})
+            )
         token_path.write_text(credentials.to_json())
         token_path.chmod(0o600)
 

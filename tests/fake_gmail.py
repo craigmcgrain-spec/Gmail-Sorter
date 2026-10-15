@@ -22,11 +22,13 @@ class FakeGmailClient:
         page_size: int = 500,
         label_ids: Sequence[Label | dict] | None = None,
         fail_on: set[str] | None = None,
+        account: str = "me@example.com",
     ):
         self.messages = dict(messages)
         self.page_size = page_size
         self.label_ids = [_as_label(label) for label in (label_ids or ())]
         self.fail_on = set(fail_on or ())
+        self.account = account
         self.calls: list[tuple] = []
         self.modified: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
 
@@ -61,6 +63,11 @@ class FakeGmailClient:
     def list_labels(self) -> list[Label]:
         self.calls.append(("list_labels", (), {}))
         return list(self.label_ids)
+
+    def get_profile(self) -> str:
+        """The authenticated account's address, as users.getProfile reports it."""
+        self.calls.append(("get_profile", (), {}))
+        return self.account
 
     def create_label(self, name: str) -> Label:
         self.calls.append(("create_label", (name,), {}))

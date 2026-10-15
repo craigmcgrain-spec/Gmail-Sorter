@@ -1,3 +1,11 @@
+[gmail]
+# The mailbox this tool is allowed to act on. Pre-selects the account at the
+# consent screen and refuses a mismatched one, so a stray signed-in Google
+# account cannot have labels written into it. Also readable from the
+# GMAIL_SORT_ACCOUNT environment variable, which `survey` uses before a config
+# exists.
+account = "craigmcgrain@gmail.com"
+
 [candidates]
 # Guarded mail is never listed, never fetched and never paid for.
 #   has:nouserlabels  leave mail you have already sorted alone

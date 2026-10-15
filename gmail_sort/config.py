@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tomllib
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ DEFAULT_SIZE = "5M"
 DEFAULT_EXCERPT_CHARS = 2000
 DEFAULT_MODEL = "claude-haiku-4-5"
 PROVIDERS = ("anthropic", "openai")
+
+# Read when [gmail] account is absent, so survey can pin the mailbox too.
+ACCOUNT_ENV = "GMAIL_SORT_ACCOUNT"
 
 # Which environment variable holds the key, when the config does not say.
 DEFAULT_API_KEY_ENV = {
@@ -92,6 +96,9 @@ class Config:
     # Messages per LLM request. A local model's context is small, so this is
     # what keeps the prompt from overflowing it.
     batch_size: int = 50
+    # The Gmail address this tool is allowed to act on. Used to pre-select the
+    # account at consent time and to refuse a mailbox we were not pointed at.
+    account: str | None = None
 
 
 def parse_size(text: str) -> int:
@@ -161,6 +168,13 @@ def load_config(path: str | Path) -> Config:
     if batch_size < 1:
         raise ConfigError(f"llm.batch_size must be at least 1, got {batch_size}")
 
+    # The account may also come from the environment, so `survey` (which runs
+    # before a config exists) can still pin the mailbox it is allowed to touch.
+    gmail_section = raw.get("gmail", {})
+    account = gmail_section.get("account") or os.environ.get(ACCOUNT_ENV) or None
+    if account is not None:
+        account = str(account).strip() or None
+
     labels = tuple(taxonomy.get("labels", ()))
     if not labels:
         raise ConfigError(
@@ -185,6 +199,7 @@ def load_config(path: str | Path) -> Config:
         base_url=base_url,
         api_key_env=api_key_env,
         batch_size=batch_size,
+        account=account,
     )
 
 

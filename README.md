@@ -94,6 +94,13 @@ decision actually changed are re-examined — from the local cache, without refe
 `config.toml`:
 
 ```toml
+[gmail]
+# The mailbox this tool is allowed to act on. Pre-selects the account at the
+# consent screen and refuses a mismatched one. Also settable via the
+# GMAIL_SORT_ACCOUNT environment variable, which is what `survey` reads before
+# a config exists.
+account = "craigmcgrain@gmail.com"
+
 [candidates]
 query = "has:nouserlabels -is:starred -is:important -larger:5M"
 
@@ -128,6 +135,18 @@ Guard query, in order of consequence:
 A rule matches when **every** field it declares matches. First match wins, ordered by
 `priority` then `name`. Every rule's `label` must appear in `taxonomy.labels`, or the
 config is rejected at load.
+
+### Which mailbox it touches
+
+`[gmail] account` is a guard, not a formality. OAuth consent can silently land on a
+different signed-in Google account, and this tool *writes labels* — doing that to the
+wrong mailbox is quiet and tedious to undo. So the address is used twice: as a
+`login_hint` at the consent screen, and as a check against `users.getProfile` before any
+command does anything. A mismatch fails the run naming both addresses.
+
+The requested scope is exactly `https://www.googleapis.com/auth/gmail.modify` — the
+narrowest that can add a label. Widening it would permit deleting mail, which this tool
+promises never to do.
 
 A label name containing `/` becomes nested in Gmail (`Notifications/CI` shows under
 `Notifications`).

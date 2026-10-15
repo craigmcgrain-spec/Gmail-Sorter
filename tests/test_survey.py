@@ -93,6 +93,53 @@ def test_open_client_names_a_missing_client_secret(tmp_path):
         _open_client(cfg(), str(tmp_path / "d.sqlite"))
 
 
+def test_the_requested_scope_is_exactly_gmail_modify():
+    # The narrowest scope that can add a label. Widening it would let this tool
+    # delete mail, which it promises never to do.
+    from gmail_sort import cli
+
+    assert cli.SCOPE == "https://www.googleapis.com/auth/gmail.modify"
+
+
+def test_a_different_signed_in_account_is_refused():
+    # Writing labels into the wrong mailbox is silent and tedious to undo.
+    from gmail_sort.cli import verify_account
+
+    client = FakeGmailClient({}, account="someone.else@gmail.com")
+    with pytest.raises(ConfigError) as excinfo:
+        verify_account(client, "craigmcgrain@gmail.com")
+    message = str(excinfo.value)
+    assert "someone.else@gmail.com" in message
+    assert "craigmcgrain@gmail.com" in message
+
+
+def test_the_expected_account_is_accepted_case_insensitively():
+    from gmail_sort.cli import verify_account
+
+    client = FakeGmailClient({}, account="CraigMcGrain@Gmail.com")
+    assert verify_account(client, "craigmcgrain@gmail.com") == "CraigMcGrain@Gmail.com"
+
+
+def test_no_expectation_means_no_check():
+    from gmail_sort.cli import verify_account
+
+    client = FakeGmailClient({}, account="anyone@gmail.com")
+    assert verify_account(client, None) == "anyone@gmail.com"
+
+
+def test_account_can_be_configured(tmp_path):
+    from gmail_sort.config import load_config
+    from tests.helpers import CONFIG_TOML
+
+    body = CONFIG_TOML.replace(
+        "[taxonomy]",
+        '[gmail]\naccount = "craigmcgrain@gmail.com"\n\n[taxonomy]',
+    )
+    path = tmp_path / "config.toml"
+    path.write_text(body)
+    assert load_config(path).account == "craigmcgrain@gmail.com"
+
+
 def test_open_client_reports_where_the_secret_should_go(tmp_path, monkeypatch):
     # "not found at client_secret.json" tells a new user nothing; the first
     # error they ever see must name a directory they can act on.

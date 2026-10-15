@@ -22,7 +22,14 @@ from gmail_sort.store import MessageRow, now
 API_ROOT = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 # Quota units per call, from Gmail's per-method table.
-QUOTA = {"list": 5, "get": 20, "batch_modify": 50, "labels_create": 5, "labels_list": 1}
+QUOTA = {
+    "list": 5,
+    "get": 20,
+    "batch_modify": 50,
+    "labels_create": 5,
+    "labels_list": 1,
+    "get_profile": 1,
+}
 
 # The per-user ceiling is 6000 units/minute, so a bucket refilling at 100
 # units/second paces us exactly at it and throttles before Gmail does.
@@ -71,6 +78,10 @@ class GmailClient(Protocol):
         ...
 
     def list_labels(self) -> list[Label]:
+        ...
+
+    def get_profile(self) -> str:
+        """The authenticated account's address, from users.getProfile."""
         ...
 
     def create_label(self, name: str) -> Label:
@@ -186,6 +197,10 @@ class RestGmailClient:
             )
             for entry in payload.get("labels") or ()
         ]
+
+    def get_profile(self) -> str:
+        payload = self._request("GET", "/profile", quota=QUOTA["get_profile"]).json()
+        return payload.get("emailAddress", "")
 
     def create_label(self, name: str) -> Label:
         payload = self._request(

@@ -192,3 +192,21 @@ def test_cli_apply_with_yes_writes(tmp_path, monkeypatch):
     assert cli.main(["apply", "--config", str(write_cfg(tmp_path)),
                      "--db", str(tmp_path / "d.sqlite"), "--yes"]) == 0
     assert fake.modified == [("m1", ("Label_1",), ())]
+
+
+def test_cli_refuses_to_write_to_the_wrong_mailbox(tmp_path, monkeypatch):
+    from gmail_sort import cli
+
+    fake = FakeGmailClient({"m1": row("m1")}, account="someone.else@gmail.com")
+    monkeypatch.setattr(cli, "_open_client", lambda config, db: fake)
+    path = write_cfg(tmp_path)
+    path.write_text(path.read_text().replace(
+        "[taxonomy]",
+        '[gmail]\naccount = "craigmcgrain@gmail.com"\n\n[taxonomy]'))
+    with Store(tmp_path / "d.sqlite") as s:
+        seed_decision(s, "m1", "Receipts",
+                      version=classifier_version_for(
+                          cli.load_config(path)))
+    assert cli.main(["apply", "--config", str(path),
+                     "--db", str(tmp_path / "d.sqlite"), "--yes"]) == 2
+    assert fake.modified == [], "nothing may be written to the wrong mailbox"
