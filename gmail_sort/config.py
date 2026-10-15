@@ -20,6 +20,12 @@ DEFAULT_EXCERPT_CHARS = 2000
 DEFAULT_MODEL = "claude-haiku-4-5"
 PROVIDERS = ("anthropic", "openai")
 
+# Which environment variable holds the key, when the config does not say.
+DEFAULT_API_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
 # Gmail size suffixes. K/M/G are binary here: the guard query is authoritative
 # and this local re-check is the belt-and-braces, so a threshold either side of
 # 5 MiB is harmless.
@@ -76,6 +82,16 @@ class Config:
     max_messages_per_run: int
     labels: tuple[str, ...]
     rules: tuple[Rule, ...]
+    # `base_url` points at any OpenAI-compatible endpoint, which is how a
+    # locally served model is used (llama.cpp's llama-server, Unsloth Studio,
+    # LM Studio, Ollama, vLLM). None means the provider's public API.
+    base_url: str | None = None
+    # Name of the environment variable holding the key; "" means send none,
+    # which is what a local server wants.
+    api_key_env: str | None = None
+    # Messages per LLM request. A local model's context is small, so this is
+    # what keeps the prompt from overflowing it.
+    batch_size: int = 50
 
 
 def parse_size(text: str) -> int:
@@ -130,6 +146,21 @@ def load_config(path: str | Path) -> Config:
     if not model:
         raise ConfigError("llm.model is required")
 
+    base_url = llm.get("base_url")
+    if base_url is not None:
+        base_url = str(base_url).rstrip("/")
+        if not base_url.startswith(("http://", "https://")):
+            raise ConfigError(
+                f"llm.base_url must start with http:// or https://, got {base_url!r}"
+            )
+
+    api_key_env = llm.get("api_key_env", DEFAULT_API_KEY_ENV.get(provider, ""))
+    api_key_env = None if api_key_env is None else str(api_key_env)
+
+    batch_size = int(llm.get("batch_size", 50))
+    if batch_size < 1:
+        raise ConfigError(f"llm.batch_size must be at least 1, got {batch_size}")
+
     labels = tuple(taxonomy.get("labels", ()))
     if not labels:
         raise ConfigError(
@@ -151,6 +182,9 @@ def load_config(path: str | Path) -> Config:
         max_messages_per_run=int(llm.get("max_messages_per_run", 0)),
         labels=labels,
         rules=rules,
+        base_url=base_url,
+        api_key_env=api_key_env,
+        batch_size=batch_size,
     )
 
 

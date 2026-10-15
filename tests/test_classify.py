@@ -169,3 +169,19 @@ def test_max_messages_per_run_caps_what_reaches_the_llm(tmp_path):
         classify(FakeGmailClient(msgs), cfg(max_messages_per_run=2), s,
                  llm=Recorder())
     assert sent == ["m0", "m1"], sent
+
+
+def test_batch_size_from_config_splits_the_llm_requests(tmp_path):
+    # A local model's context is small: 50 messages per request would overflow
+    # a 4096-token window, so each request must respect batch_size.
+    msgs = {f"m{i}": row(f"m{i}", from_domain="unknown.com") for i in range(5)}
+    sizes = []
+
+    class Recorder:
+        def classify(self, batch, labels):
+            sizes.append(len(batch))
+            return [None] * len(batch)
+
+    with Store(tmp_path / "d.sqlite") as s:
+        classify(FakeGmailClient(msgs), cfg(batch_size=2), s, llm=Recorder())
+    assert sizes == [2, 2, 1], sizes

@@ -111,6 +111,51 @@ def test_openai_posts_the_batch_and_parses_labels():
     assert openai(handler).classify([row("m1")], LABELS) == ["Receipts"]
 
 
+# a locally served model -----------------------------------------------------
+
+LOCAL = "http://192.168.1.164:8080/v1"
+
+
+def test_openai_posts_to_the_configured_base_url():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"choices": [
+            {"message": {"content": '["Receipts"]'}}]})
+
+    client = OpenAIClassifier(
+        httpx.Client(transport=httpx.MockTransport(handler)), None, "Qwen3.8-2B",
+        base_url=LOCAL)
+    assert client.classify([row("m1")], LABELS) == ["Receipts"]
+    assert seen["url"] == f"{LOCAL}/chat/completions"
+
+
+def test_openai_omits_the_auth_header_when_no_key_is_configured():
+    # llama-server and Unsloth Studio need no key; sending an empty bearer
+    # token would be worse than sending none.
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"choices": [
+            {"message": {"content": '["Receipts"]'}}]})
+
+    client = OpenAIClassifier(
+        httpx.Client(transport=httpx.MockTransport(handler)), None, "Qwen3.8-2B",
+        base_url=LOCAL)
+    assert client.classify([row("m1")], LABELS) == ["Receipts"]
+    assert seen["auth"] is None
+
+
+def test_make_classifier_points_at_a_local_server_without_a_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    classifier = make_classifier(
+        cfg(llm_provider="openai", llm_model="Qwen3.8-2B", base_url=LOCAL,
+            api_key_env=""))
+    assert classifier is not None
+
+
 # wiring ---------------------------------------------------------------------
 
 def test_make_classifier_names_the_missing_api_key(monkeypatch):

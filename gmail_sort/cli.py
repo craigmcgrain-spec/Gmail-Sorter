@@ -165,7 +165,7 @@ def classify(
     )
     for chunk in chunked(
         pending[:effective_limit] if effective_limit is not None else pending,
-        LLM_BATCH_SIZE,
+        cfg.batch_size,
     ):
         bodies: list[MessageRow] = []
         for message in chunk:

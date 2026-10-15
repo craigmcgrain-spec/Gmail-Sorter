@@ -7,7 +7,8 @@
 query = "has:nouserlabels -is:starred -is:important -larger:5M"
 
 [fetch]
-# Body excerpt length cached for LLM classification, in characters.
+# Body excerpt length cached for LLM classification, in characters. Keeping a
+# local model inside its context window may mean shrinking this.
 excerpt_chars = 2000
 # Cache truncated bodies so re-tuning rules and prompts makes no API calls.
 store_bodies = true
@@ -16,6 +17,25 @@ store_bodies = true
 provider = "anthropic"          # anthropic | openai
 model = "claude-haiku-4-5"
 max_messages_per_run = 0        # 0 = unlimited; positive value caps LLM spend
+# Messages per LLM request. Lower this for a local model: 50 messages with a
+# 2000-character excerpt is roughly 30,000 tokens of prompt, which overflows a
+# default 4096-token context window.
+batch_size = 50
+
+# --- Using a model served on your own machine -------------------------------
+# `provider = "openai"` means "the OpenAI wire format", not the company. These
+# all speak it: llama.cpp's llama-server, Unsloth Studio, LM Studio, Ollama,
+# vLLM. Point base_url at the server; api_key_env = "" sends no auth header.
+#
+#   provider = "openai"
+#   model = "Qwen3.8-2B"                     # must match the id /v1/models reports
+#   base_url = "http://192.168.1.164:8080/v1"
+#   api_key_env = ""
+#   batch_size = 6                           # fits an 8k context comfortably
+#
+# And under [fetch] above, excerpt_chars = 600 pairs well with batch_size = 6.
+# Check the exact model id once the server is up:
+#   curl http://192.168.1.164:8080/v1/models
 
 [taxonomy]
 # Active labels. classify may only assign one of these.

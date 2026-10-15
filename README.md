@@ -140,6 +140,63 @@ export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY, matching llm.provider
 
 `classify --estimate` needs no key.
 
+## Using a model on your own machine
+
+`provider = "openai"` means **the OpenAI wire format**, not the company — so a locally
+served model works with no code changes. llama.cpp's `llama-server`, Unsloth Studio,
+LM Studio, Ollama and vLLM all speak it.
+
+Start your server, then point the config at it:
+
+```toml
+[llm]
+provider = "openai"
+model = "Qwen3.8-2B"                      # must match the id the server reports
+base_url = "http://192.168.1.164:8080/v1"
+api_key_env = ""                          # sends no Authorization header
+batch_size = 6
+
+[fetch]
+excerpt_chars = 600
+```
+
+For Unsloth Studio, the API server is:
+
+```bash
+unsloth studio --api-only --host 0.0.0.0 --port 8080
+```
+
+Its defaults are port **8888** and host **127.0.0.1**, which is not reachable from
+another machine — pass `--host 0.0.0.0` and a port of your choosing. For llama.cpp:
+
+```bash
+llama-server -m /path/to/model.gguf -c 8192 --port 8080
+```
+
+Once it is up, confirm the model id and that it ignores the missing key:
+
+```bash
+curl http://192.168.1.164:8080/v1/models
+```
+
+**Setting `batch_size` correctly is not optional.** A request with 50 messages and
+2000-character excerpts is roughly 30,000 tokens of prompt. `llama-server` defaults to a
+**4096-token context**, so that request fails outright rather than degrading. Budget for
+prompt + reply: `batch_size × (excerpt_chars / 4 + 60) < context`. With a 4096-token
+window, `batch_size = 4` and `excerpt_chars = 400` is a safe starting point; with 8192,
+`batch_size = 6` and `excerpt_chars = 600`. Raise the server's context with `-c` if you
+want larger batches.
+
+Two things to expect from a small local model:
+
+- **It will under-label, not mislabel.** A reply is accepted only if it exactly matches a
+  label you approved; malformed JSON, invented labels and prose all become `UNSORTED`. So
+  a weak model leaves messages unlabelled — it cannot file them wrongly. Lean on rules,
+  which cost nothing, and keep the taxonomy small: 5–10 labels, not 25.
+- **It is slow.** CPU-only inference on a 2B model runs roughly 20–40 s per request, so
+  20,000 LLM-bound messages is on the order of a day, against ~3.9 h on a hosted API.
+  `classify` is resumable, so `--limit` lets you work through it over several runs.
+
 ## Timing and cost
 
 Gmail's limit is 6,000 quota units per minute per user, and `messages.get` costs 20 of

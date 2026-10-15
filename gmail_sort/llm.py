@@ -13,12 +13,14 @@ from typing import Callable, Protocol, Sequence
 
 import httpx
 
-from gmail_sort.config import Config, ConfigError
+from gmail_sort.config import DEFAULT_API_KEY_ENV, Config, ConfigError
 from gmail_sort.store import MessageRow
 
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_BASE = "https://api.anthropic.com/v1"
+ANTHROPIC_PATH = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_BASE = "https://api.openai.com/v1"
+OPENAI_PATH = "/chat/completions"
 
 MAX_TOKENS = 4096
 # Rough characters-per-token used only for the --estimate report.
@@ -76,17 +78,51 @@ def make_classifier(
 ) -> Classifier:
     client = http or httpx.Client(timeout=120.0)
     if cfg.llm_provider == "anthropic":
-        return AnthropicClassifier(client, _api_key("ANTHROPIC_API_KEY"), cfg.llm_model)
+        return AnthropicClassifier(
+            client, _api_key(cfg, "anthropic"), cfg.llm_model, base_url=cfg.base_url
+        )
     if cfg.llm_provider == "openai":
-        return OpenAIClassifier(client, _api_key("OPENAI_API_KEY"), cfg.llm_model)
+        return OpenAIClassifier(
+            client, _api_key(cfg, "openai"), cfg.llm_model, base_url=cfg.base_url
+        )
     raise ConfigError(f"unknown llm provider: {cfg.llm_provider!r}")
 
 
+def _api_key(cfg: Config, provider: str) -> str | None:
+    """The API key, or None when none is needed.
+
+    `api_key_env = ""` means "send no key", which is what a locally served model
+    wants. Anything else names the variable to read.
+    """
+    name = (
+        cfg.api_key_env
+        if cfg.api_key_env is not None
+        else DEFAULT_API_KEY_ENV.get(provider, "")
+    )
+    if not name:
+        return None
+    value = os.environ.get(name)
+    if not value:
+        raise ConfigError(
+            f"{name} is not set. Export it, or set llm.api_key_env = \"\" if you are "
+            "using a local server that needs no key."
+        )
+    return value
+
+
 class AnthropicClassifier:
-    def __init__(self, http: httpx.Client, api_key: str, model: str):
+    def __init__(
+        self,
+        http: httpx.Client,
+        api_key: str | None,
+        model: str,
+        *,
+        base_url: str | None = None,
+    ):
         self._http = http
         self._api_key = api_key
         self._model = model
+        self._url = (base_url or ANTHROPIC_BASE).rstrip("/") + ANTHROPIC_PATH
 
     def classify(
         self, batch: Sequence[MessageRow], labels: Sequence[str]
@@ -94,13 +130,15 @@ class AnthropicClassifier:
         return _classify_with(lambda chunk: self._call(chunk, labels), batch, labels)
 
     def _call(self, batch: Sequence[MessageRow], labels: Sequence[str]) -> str:
+        headers = {
+            "anthropic-version": ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
+        if self._api_key:
+            headers["x-api-key"] = self._api_key
         response = self._http.post(
-            ANTHROPIC_URL,
-            headers={
-                "x-api-key": self._api_key,
-                "anthropic-version": ANTHROPIC_VERSION,
-                "content-type": "application/json",
-            },
+            self._url,
+            headers=headers,
             json={
                 "model": self._model,
                 "max_tokens": MAX_TOKENS,
@@ -118,10 +156,20 @@ class AnthropicClassifier:
 
 
 class OpenAIClassifier:
-    def __init__(self, http: httpx.Client, api_key: str, model: str):
+    """Any OpenAI-compatible endpoint, including locally served models."""
+
+    def __init__(
+        self,
+        http: httpx.Client,
+        api_key: str | None,
+        model: str,
+        *,
+        base_url: str | None = None,
+    ):
         self._http = http
         self._api_key = api_key
         self._model = model
+        self._url = (base_url or OPENAI_BASE).rstrip("/") + OPENAI_PATH
 
     def classify(
         self, batch: Sequence[MessageRow], labels: Sequence[str]
@@ -129,9 +177,12 @@ class OpenAIClassifier:
         return _classify_with(lambda chunk: self._call(chunk, labels), batch, labels)
 
     def _call(self, batch: Sequence[MessageRow], labels: Sequence[str]) -> str:
+        headers = {"content-type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         response = self._http.post(
-            OPENAI_URL,
-            headers={"Authorization": f"Bearer {self._api_key}"},
+            self._url,
+            headers=headers,
             json={
                 "model": self._model,
                 "temperature": 0,
@@ -189,12 +240,3 @@ def _render(labels: Sequence[str], batch: Sequence[MessageRow]) -> str:
         labels="\n".join(f"- {label}" for label in labels),
         messages="\n".join(messages),
     )
-
-
-def _api_key(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise ConfigError(
-            f"{name} is not set. Export it, or choose a different llm.provider."
-        )
-    return value
