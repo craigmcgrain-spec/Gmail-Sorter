@@ -98,7 +98,7 @@ query = "has:nouserlabels -is:starred -is:important -larger:5M"
 [llm]
 provider = "openai"
 model = "Qwen3.8-2B"
-base_url = "http://192.168.1.164:8080/v1"
+base_url = "http://192.168.1.154:8080/v1"
 api_key_env = ""
 batch_size = 6
 
@@ -118,7 +118,7 @@ list_id = "news.example.com"
 
 def test_a_local_server_can_be_configured(tmp_path):
     cfg = load_config(write(tmp_path, LOCAL_LLM))
-    assert cfg.base_url == "http://192.168.1.164:8080/v1"
+    assert cfg.base_url == "http://192.168.1.154:8080/v1"
     assert cfg.api_key_env == ""
     assert cfg.batch_size == 6
     assert cfg.excerpt_chars == 600

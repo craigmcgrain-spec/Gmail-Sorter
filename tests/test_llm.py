@@ -113,7 +113,7 @@ def test_openai_posts_the_batch_and_parses_labels():
 
 # a locally served model -----------------------------------------------------
 
-LOCAL = "http://192.168.1.164:8080/v1"
+LOCAL = "http://192.168.1.154:8080/v1"
 
 
 def test_openai_posts_to_the_configured_base_url():

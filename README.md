@@ -152,7 +152,7 @@ Start your server, then point the config at it:
 [llm]
 provider = "openai"
 model = "Qwen3.8-2B"                      # must match the id the server reports
-base_url = "http://192.168.1.164:8080/v1"
+base_url = "http://192.168.1.154:8080/v1"
 api_key_env = ""                          # sends no Authorization header
 batch_size = 6
 
@@ -176,7 +176,7 @@ llama-server -m /path/to/model.gguf -c 8192 --port 8080
 Once it is up, confirm the model id and that it ignores the missing key:
 
 ```bash
-curl http://192.168.1.164:8080/v1/models
+curl http://192.168.1.154:8080/v1/models
 ```
 
 **Setting `batch_size` correctly is not optional.** A request with 50 messages and

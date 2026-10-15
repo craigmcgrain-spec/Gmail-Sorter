@@ -6,7 +6,12 @@ __pycache__/
 *.sqlite-wal
 *.sqlite-shm
 .pytest_cache/
+*.egg-info/
+
+# Credentials and secrets: never commit these.
 client_secret.json
 token.json
-config.toml
-*.egg-info/
+.env
+.env.*
+*.key
+secrets*
