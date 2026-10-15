@@ -1110,10 +1110,10 @@ git commit -m "feat: classify command with rule fast-path and cached LLM fallbac
 ```python
 # tests/test_apply.py
 import pytest
-from gmail_sort.cli import apply_plan, plan_apply
+from gmail_sort.cli import apply_plan, classifier_version_for, plan_apply
 from gmail_sort.store import Decision, Store
 from tests.fake_gmail import FakeGmailClient
-from tests.helpers import row, cfg, seed_decision
+from tests.helpers import row, cfg, seed_decision, write_cfg
 
 def test_dry_run_writes_nothing(tmp_path):
     with Store(tmp_path / "d.sqlite") as s:
@@ -1206,7 +1206,8 @@ def test_cli_apply_without_yes_is_a_dry_run(tmp_path, monkeypatch):
     fake = FakeGmailClient(msgs)
     monkeypatch.setattr(cli, "_open_client", lambda cfg, db: fake)
     with Store(tmp_path / "d.sqlite") as s:
-        seed_decision(s, "m1", "Receipts")
+        # the CLI resolves decisions by the version it computes from the config
+        seed_decision(s, "m1", "Receipts", version=classifier_version_for(cfg()))
     assert cli.main(["apply", "--config", str(write_cfg(tmp_path)),
                      "--db", str(tmp_path / "d.sqlite")]) == 0
     assert fake.modified == []
@@ -1216,7 +1217,7 @@ def test_cli_apply_with_yes_writes(tmp_path, monkeypatch):
     fake = FakeGmailClient({"m1": row("m1")})
     monkeypatch.setattr(cli, "_open_client", lambda cfg, db: fake)
     with Store(tmp_path / "d.sqlite") as s:
-        seed_decision(s, "m1", "Receipts")
+        seed_decision(s, "m1", "Receipts", version=classifier_version_for(cfg()))
     assert cli.main(["apply", "--config", str(write_cfg(tmp_path)),
                      "--db", str(tmp_path / "d.sqlite"), "--yes"]) == 0
     assert fake.modified == [("m1", ("Label_1",), ())]

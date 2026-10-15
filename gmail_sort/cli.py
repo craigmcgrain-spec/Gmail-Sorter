@@ -32,6 +32,9 @@ DEFAULT_SAMPLE = 1000
 # Messages per LLM request. Small enough that one bad batch is cheap to retry.
 LLM_BATCH_SIZE = 50
 
+# Gmail's hard limit for messages.batchModify.
+APPLY_BATCH_SIZE = 1000
+
 
 @dataclass(frozen=True)
 class Survey:
@@ -54,6 +57,16 @@ class ClassifyStats:
     gets: int = 0
     skipped_guard: int = 0
     estimated_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class ApplyStats:
+    labels: int = 0
+    messages: int = 0
+    applied: int = 0
+    skipped_missing: int = 0
+    skipped_guard: int = 0
+    batches: int = 0
 
 
 def classifier_version_for(cfg: Config) -> str:
@@ -141,6 +154,107 @@ def classify(
             counters["unsorted" if label is None else "llm_matched"] += 1
 
     return _stats(counters)
+
+
+def plan_apply(store: Store, cfg: Config, *, version: str) -> dict[str, list[str]]:
+    """Label name to message ids, for everything decided and not yet applied.
+
+    A decision whose label has left the taxonomy is dropped, and a pair already
+    applied and not since undone is excluded. The exclusion is what makes a
+    second `apply` issue no further API calls, and what re-enables a pair after
+    `undo`.
+    """
+    already = store.applied_pairs()
+    plan: dict[str, list[str]] = {}
+    for decision in store.iter_decisions(version):
+        label = decision.label
+        if label is None or label not in cfg.labels:
+            continue
+        if (decision.message_id, label) in already:
+            continue
+        plan.setdefault(label, []).append(decision.message_id)
+    return plan
+
+
+def apply_plan(
+    client: GmailClient,
+    store: Store,
+    cfg: Config,
+    plan: dict[str, list[str]],
+    *,
+    dry_run: bool,
+    run_id: int,
+    limit: int | None = None,
+) -> ApplyStats:
+    """Add labels. Never removes one, never deletes, never touches Inbox state.
+
+    Dry running is read-only: no labels are created, nothing is logged.
+    """
+    existing = client.list_labels()
+    known_user_labels = user_label_ids(existing)
+    by_name = {label.name: label for label in existing}
+
+    counters: Counter[str] = Counter()
+    remaining = limit
+
+    for name, message_ids in plan.items():
+        counters["labels"] += 1
+        label = by_name.get(name)
+        if label is None and not dry_run:
+            label = client.create_label(name)
+            by_name[name] = label
+
+        chosen: list[str] = []
+        for message_id in message_ids:
+            if remaining is not None and remaining <= 0:
+                break
+            message = store.get_message(message_id)
+            if message is None:
+                counters["skipped_missing"] += 1
+                continue
+            # Re-checked here, not just in the query: mail may have gained a
+            # star, an Important flag or a label since it was classified.
+            if violation(
+                message,
+                user_label_ids=known_user_labels,
+                min_size_bytes=cfg.min_size_bytes,
+            ) is not None:
+                counters["skipped_guard"] += 1
+                continue
+            chosen.append(message_id)
+            if remaining is not None:
+                remaining -= 1
+
+        counters["messages"] += len(chosen)
+        if dry_run or not chosen:
+            continue
+
+        for chunk in chunked(chosen, APPLY_BATCH_SIZE):
+            for message_id in chunk:
+                # Logged before the call, so a crash mid-write over-reports
+                # rather than hiding what was applied.
+                store.log_change(run_id, message_id, name, "add")
+            counters["batches"] += 1
+            try:
+                client.batch_modify(chunk, add=[label.id])
+                counters["applied"] += len(chunk)
+            except Exception:
+                # One stale id must not abort a run over 50,000 messages.
+                for message_id in chunk:
+                    try:
+                        client.batch_modify([message_id], add=[label.id])
+                        counters["applied"] += 1
+                    except Exception:
+                        counters["skipped_missing"] += 1
+
+    return ApplyStats(
+        labels=counters["labels"],
+        messages=counters["messages"],
+        applied=counters["applied"],
+        skipped_missing=counters["skipped_missing"],
+        skipped_guard=counters["skipped_guard"],
+        batches=counters["batches"],
+    )
 
 
 def survey(
@@ -239,6 +353,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _survey_command(args)
         if args.command == "classify":
             return _classify_command(args)
+        if args.command == "apply":
+            return _apply_command(args)
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -275,6 +391,15 @@ def _parser() -> argparse.ArgumentParser:
                                  help="cap how many messages reach the LLM this run")
     classify_parser.add_argument("--no-llm", action="store_true",
                                  help="rules only; leave the rest undecided")
+
+    apply_parser = subparsers.add_parser(
+        "apply", help="add the decided labels (dry run unless --yes)"
+    )
+    _add_common(apply_parser)
+    apply_parser.add_argument("--yes", action="store_true",
+                              help="actually write to Gmail")
+    apply_parser.add_argument("--limit", type=int, default=None,
+                              help="cap how many messages are labelled this run")
 
     return parser
 
@@ -320,6 +445,43 @@ def _classify_command(args) -> int:
     print(f"labelled: rules {stats.rule_matched}, llm {stats.llm_matched},"
           f" unsorted {stats.unsorted}")
     print("Nothing was written to Gmail. Review with `apply` (dry run by default).")
+    return 0
+
+
+def _apply_command(args) -> int:
+    cfg = load_config(args.config)
+    version = classifier_version_for(cfg)
+
+    with Store(args.db) as store:
+        plan = plan_apply(store, cfg, version=version)
+        if not any(plan.values()):
+            print("Nothing to apply: no decisions are waiting.")
+            return 0
+
+        client = _open_client(cfg, args.db)
+        run_id = store.start_run("apply", dry_run=not args.yes, config_hash=version)
+        stats = apply_plan(
+            client, store, cfg, plan,
+            dry_run=not args.yes, run_id=run_id, limit=args.limit,
+        )
+        store.finish_run(run_id)
+        counts = {name: len(ids) for name, ids in plan.items()}
+
+    if not args.yes:
+        for name in sorted(counts):
+            print(f"  {counts[name]:6d}  {name}")
+        print(f"{stats.messages} messages in {stats.labels} labels would be labelled"
+              f" ({stats.skipped_guard} now fail a guard).")
+        print(f"Dry run (run {run_id}); nothing was written. Re-run with --yes.")
+        return 0
+
+    print(f"labelled {stats.applied} of {stats.messages} messages"
+          f" across {stats.labels} labels")
+    if stats.skipped_missing:
+        print(f"  {stats.skipped_missing} no longer exist")
+    if stats.skipped_guard:
+        print(f"  {stats.skipped_guard} now fail a guard")
+    print(f"Undo this run with: gmail-sort undo {run_id}")
     return 0
 
 
