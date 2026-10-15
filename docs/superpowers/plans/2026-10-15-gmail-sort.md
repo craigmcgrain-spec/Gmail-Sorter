@@ -967,7 +967,7 @@ git commit -m "feat: provider-swappable LLM classifier with strict sanitize"
 - Produces:
   - `def classifier_version_for(cfg: Config) -> str` — `config.classifier_version(cfg.labels, cfg.rules, llm.PROMPT_TEMPLATE, cfg.llm_model)`; the single place the version is computed, so tests and `classify` agree on it.
   - `def classify(client: GmailClient, cfg: Config, store: Store, *, llm: Classifier | None = None, limit: int | None = None) -> ClassifyStats`
-  - `class ClassifyStats` — frozen dataclass: `candidates: int`, `cached: int`, `rule_matched: int`, `llm_matched: int`, `unsorted: int`, `llm_calls: int`, `gets: int`.
+  - `class ClassifyStats` — frozen dataclass: `candidates: int`, `cached: int`, `rule_matched: int`, `llm_matched: int`, `unsorted: int`, `llm_calls: int`, `gets: int` (format=full fetches), `skipped_guard: int`, `estimated_tokens: int`.
 
 `classify` CLI: `gmail-sort classify [--config PATH] [--db PATH] [--estimate] [--limit N] [--no-llm]`.
 
@@ -984,8 +984,9 @@ def version():
     return classifier_version_for(cfg())
 
 def run(tmp_path, msgs, **kw):
-    with Store(tmp_path / "d.sqlite") as s:
-        return classify(FakeGmailClient(msgs), cfg(), s, **kw), s
+    # Not a `with` block: the caller asserts on decisions afterwards.
+    store = Store(tmp_path / "d.sqlite")
+    return classify(FakeGmailClient(msgs), cfg(), store, **kw), store
 
 def test_rule_match_avoids_the_llm_entirely(tmp_path, rule_llm):
     msgs = {"m1": row("m1", from_domain="github.com")}
@@ -1078,7 +1079,7 @@ Walk `client.iter_message_ids(guard_query(cfg))`:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_classify.py -v`
-Expected: PASS, 10 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Commit**
 

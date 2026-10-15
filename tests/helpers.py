@@ -74,6 +74,13 @@ def cfg(**overrides) -> Config:
     return Config(**base)
 
 
+def cfg_with_extra_rule() -> Config:
+    """`cfg()` plus one more rule, so classifier_version changes."""
+    extra = Rule(name="newsletters", priority=50, label="Newsletters",
+                 list_id="news.example.com")
+    return cfg(rules=(ci_rule(), extra))
+
+
 def write_cfg(tmp_path: Path) -> Path:
     path = tmp_path / "config.toml"
     path.write_text(CONFIG_TOML)

@@ -16,15 +16,21 @@ from typing import Sequence
 
 import httpx
 
-from gmail_sort.config import Config, ConfigError, load_config
-from gmail_sort.gmail import GmailClient, RestGmailClient
-from gmail_sort.guards import SYSTEM_LABEL_IDS, guard_query
+from gmail_sort import rules
+from gmail_sort.config import Config, ConfigError, classifier_version, load_config
+from gmail_sort.gmail import GmailClient, RestGmailClient, chunked
+from gmail_sort.guards import SYSTEM_LABEL_IDS, guard_query, user_label_ids, violation
+from gmail_sort.llm import PROMPT_TEMPLATE, Classifier, estimate, make_classifier
+from gmail_sort.store import Decision, MessageRow, Store, now
 
 SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 
 DEFAULT_DB = "gmail-sort.sqlite"
 DEFAULT_PROPOSAL = "config.proposed.toml"
 DEFAULT_SAMPLE = 1000
+
+# Messages per LLM request. Small enough that one bad batch is cheap to retry.
+LLM_BATCH_SIZE = 50
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,106 @@ class Survey:
     categories: list[tuple[str, int]]
     labels: list[tuple[str, int]]
     existing_labels: list[str]
+
+
+@dataclass(frozen=True)
+class ClassifyStats:
+    candidates: int = 0
+    cached: int = 0
+    rule_matched: int = 0
+    llm_matched: int = 0
+    unsorted: int = 0
+    llm_calls: int = 0
+    gets: int = 0
+    skipped_guard: int = 0
+    estimated_tokens: int = 0
+
+
+def classifier_version_for(cfg: Config) -> str:
+    """The single place the decision cache key is computed."""
+    return classifier_version(
+        cfg.labels, cfg.rules, PROMPT_TEMPLATE, cfg.llm_model
+    )
+
+
+def classify(
+    client: GmailClient,
+    cfg: Config,
+    store: Store,
+    *,
+    llm: Classifier | None = None,
+    limit: int | None = None,
+    dry_run: bool = False,
+) -> ClassifyStats:
+    """Rules first, the LLM only for what is left, every decision cached.
+
+    Never writes to Gmail. With `dry_run` nothing is persisted either, which is
+    what `--estimate` uses.
+    """
+    version = classifier_version_for(cfg)
+    known_user_labels = user_label_ids(client.list_labels())
+    counters: Counter[str] = Counter()
+    pending: list[MessageRow] = []
+
+    for message_id in client.iter_message_ids(guard_query(cfg)):
+        if store.get_decision(message_id, version) is not None:
+            counters["cached"] += 1
+            continue
+
+        message = client.get_message(message_id)
+        reason = violation(
+            message,
+            user_label_ids=known_user_labels,
+            min_size_bytes=cfg.min_size_bytes,
+        )
+        if reason is not None:
+            counters["skipped_guard"] += 1
+            continue
+
+        counters["candidates"] += 1
+        if not dry_run:
+            store.upsert_messages([message])
+
+        match = rules.classify(message, cfg.rules)
+        if match is not None:
+            label, rule_name = match
+            if not dry_run:
+                _save_decision(store, message.id, label, "rule", rule_name, version)
+            counters["rule_matched"] += 1
+            continue
+        pending.append(message)
+
+    if dry_run:
+        counters["estimated_tokens"] = estimate(pending, cfg.labels)[1]
+        return _stats(counters)
+
+    if llm is None:
+        # --no-llm: record the leftovers as undecided rather than guessing.
+        for message in pending:
+            _save_decision(store, message.id, None, "rule", None, version)
+            counters["unsorted"] += 1
+        return _stats(counters)
+
+    for chunk in chunked(pending[:limit] if limit is not None else pending,
+                         LLM_BATCH_SIZE):
+        bodies: list[MessageRow] = []
+        for message in chunk:
+            body = message
+            if message.excerpt is None:
+                # The only format=full fetch in the program.
+                body = client.get_message(message.id, full=True)
+                counters["gets"] += 1
+                if cfg.store_bodies:
+                    store.upsert_messages([body])
+            bodies.append(body)
+
+        answers = llm.classify(bodies, cfg.labels)
+        counters["llm_calls"] += 1
+        for message, label in zip(bodies, answers):
+            _save_decision(store, message.id, label, "llm", None, version)
+            counters["unsorted" if label is None else "llm_matched"] += 1
+
+    return _stats(counters)
 
 
 def survey(
@@ -131,6 +237,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "survey":
             return _survey_command(args)
+        if args.command == "classify":
+            return _classify_command(args)
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -157,6 +265,17 @@ def _parser() -> argparse.ArgumentParser:
                                help="how many candidates to fetch for the sender "
                                     f"breakdown (default: {DEFAULT_SAMPLE})")
 
+    classify_parser = subparsers.add_parser(
+        "classify", help="decide labels for every candidate (writes nothing to Gmail)"
+    )
+    _add_common(classify_parser)
+    classify_parser.add_argument("--estimate", action="store_true",
+                                 help="report what would be sent to the LLM and exit")
+    classify_parser.add_argument("--limit", type=int, default=None,
+                                 help="cap how many messages reach the LLM this run")
+    classify_parser.add_argument("--no-llm", action="store_true",
+                                 help="rules only; leave the rest undecided")
+
     return parser
 
 
@@ -179,6 +298,63 @@ def _survey_command(args) -> int:
         print(f"  {count:6d}  {domain}")
     print(f"Proposal written to {out} — edit it, then rename to config.toml.")
     return 0
+
+
+def _classify_command(args) -> int:
+    cfg = load_config(args.config)
+    with Store(args.db) as store:
+        client = _open_client(cfg, args.db)
+        if args.estimate:
+            stats = classify(client, cfg, store, dry_run=True)
+            would_ask = stats.candidates - stats.rule_matched
+            print(f"{stats.candidates} candidates: {stats.rule_matched} matched by rules,"
+                  f" {would_ask} would go to the LLM")
+            print(f"estimated {stats.estimated_tokens} tokens"
+                  f" ({stats.skipped_guard} skipped by guards)")
+            return 0
+        llm = None if args.no_llm else make_classifier(cfg)
+        stats = classify(client, cfg, store, llm=llm, limit=args.limit)
+
+    print(f"candidates {stats.candidates}"
+          f" (already decided {stats.cached}, skipped by guards {stats.skipped_guard})")
+    print(f"labelled: rules {stats.rule_matched}, llm {stats.llm_matched},"
+          f" unsorted {stats.unsorted}")
+    print("Nothing was written to Gmail. Review with `apply` (dry run by default).")
+    return 0
+
+
+def _save_decision(
+    store: Store,
+    message_id: str,
+    label: str | None,
+    source: str,
+    rule_name: str | None,
+    version: str,
+) -> None:
+    store.put_decision(
+        Decision(
+            message_id=message_id,
+            label=label,
+            source=source,
+            rule_name=rule_name,
+            classifier_version=version,
+            decided_at=now(),
+        )
+    )
+
+
+def _stats(counters: Counter) -> ClassifyStats:
+    return ClassifyStats(
+        candidates=counters["candidates"],
+        cached=counters["cached"],
+        rule_matched=counters["rule_matched"],
+        llm_matched=counters["llm_matched"],
+        unsorted=counters["unsorted"],
+        llm_calls=counters["llm_calls"],
+        gets=counters["gets"],
+        skipped_guard=counters["skipped_guard"],
+        estimated_tokens=counters["estimated_tokens"],
+    )
 
 
 def _open_client(cfg: Config, db_path: str) -> GmailClient:
