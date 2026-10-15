@@ -327,7 +327,7 @@ Gmail API usage is free at these volumes; the daily billing threshold is
 
 | Workload | Quota units |
 |---|---|
-| `survey` over 50,000 messages | ~500 (list calls only) |
+| `survey` over 50,000 messages | ~500 to list, plus ~20,000 to sample 1,000 senders → ~20,500 (≈3.5 min) |
 | Cold `classify`, 100% LLM path | ~2,000,000 → ~5.5 h |
 | Cold `classify`, 60% rule match | ~1,400,000 → ~3.9 h |
 | Warm `classify` (all cached) | 0 |

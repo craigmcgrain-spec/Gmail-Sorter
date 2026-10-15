@@ -765,7 +765,11 @@ git commit -m "feat: rate-limited Gmail REST client with pagination and backoff"
   - `def render_proposal(s: Survey, cfg: Config) -> str` — returns the `config.proposed.toml` text with `[taxonomy]` commented out.
   - `def main(argv: Sequence[str] | None = None) -> int`
 
-`survey` CLI: `gmail-sort survey [--config PATH] [--db PATH] [--out PATH] [--top N]`.
+`survey` CLI: `gmail-sort survey [--config PATH] [--db PATH] [--out PATH] [--top N] [--sample N]`.
+
+Senders, categories and label counts come from the first `--sample` candidates
+(default 1000), because fetching a message to read its sender costs 20 quota
+units where listing it costs a fraction of one. The candidate total is exact.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -843,7 +847,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'gmail_sort.cli'`
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_survey.py -v`
-Expected: PASS, 8 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 5: Commit**
 
