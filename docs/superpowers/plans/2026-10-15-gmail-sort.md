@@ -243,7 +243,7 @@ Pure function, no I/O. Sort rules once per call by `(priority, name)`. `from_dom
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_rules.py -v`
-Expected: PASS, 9 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Commit**
 
