@@ -938,14 +938,14 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'gmail_sort.llm'`
 
 `PROMPT_TEMPLATE` is a module constant that names the taxonomy, states that the only acceptable answers are one of the listed labels or `UNSORTED`, and asks for a JSON array of strings with one entry per message in order. It is hashed into `classifier_version`, so changing it invalidates cached decisions.
 
-`sanitize` is the safety boundary and is deliberately strict: exact match against `labels` after `strip()`; `"UNSORTED"` (any case) and empty become `None`; no substring or fuzzy matching; a short response is padded with `None`. This is what enforces Review Focus #3.
+`sanitize` is the safety boundary and is deliberately strict: exact match against `labels` after `strip()`; `"UNSORTED"` (any case) and empty become `None`; no substring or fuzzy matching. It maps one entry in to one out; padding a short reply up to the batch length is `_classify_with`'s job, so a one-entry reply can never shift onto the second message. This is what enforces Review Focus #3.
 
 `sanitize` is applied to **every** provider's output, and the providers themselves do no interpretation. Each provider posts one request per batch, parses a JSON array out of the reply, and on unparseable output retries exactly once before returning all `None`. `temperature` is 0. `make_classifier` reads the API key from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` and raises `ConfigError` naming the missing variable.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_llm.py -v`
-Expected: PASS, 9 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 5: Commit**
 
