@@ -91,3 +91,19 @@ def test_main_survey_writes_the_proposal_file(tmp_path, monkeypatch):
 def test_open_client_names_a_missing_client_secret(tmp_path):
     with pytest.raises(ConfigError, match="client_secret.json"):
         _open_client(cfg(), str(tmp_path / "d.sqlite"))
+
+
+def test_cli_survey_runs_before_a_config_exists(tmp_path, monkeypatch):
+    # The whole point of survey is to help produce a config, so it must not
+    # require one. Without this the documented first command fails.
+    from gmail_sort import cli
+
+    monkeypatch.setattr(cli, "_open_client", lambda config, db: FakeGmailClient({}))
+    out = tmp_path / "proposed.toml"
+    assert cli.main(["survey", "--config", str(tmp_path / "no-such-config.toml"),
+                     "--db", str(tmp_path / "d.sqlite"),
+                     "--out", str(out)]) == 0
+    text = out.read_text()
+    assert "# [taxonomy]" in text
+    # and the proposal still carries the default guard query
+    assert "has:nouserlabels -is:starred -is:important -larger:5M" in text

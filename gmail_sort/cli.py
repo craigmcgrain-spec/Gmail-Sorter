@@ -17,7 +17,13 @@ from typing import Sequence
 import httpx
 
 from gmail_sort import rules
-from gmail_sort.config import Config, ConfigError, classifier_version, load_config
+from gmail_sort.config import (
+    Config,
+    ConfigError,
+    classifier_version,
+    default_config,
+    load_config,
+)
 from gmail_sort.gmail import (
     GmailClient,
     PermanentRequestError,
@@ -525,7 +531,13 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 
 def _survey_command(args) -> int:
-    cfg = load_config(args.config)
+    # Survey exists to help produce a config, so it must run without one.
+    config_path = Path(args.config)
+    if config_path.exists():
+        cfg = load_config(config_path)
+    else:
+        cfg = default_config()
+        print(f"No {config_path} yet — surveying with the default guards.")
     client = _open_client(cfg, args.db)
     result = survey(client, cfg, top=args.top, sample=args.sample)
     out = Path(args.out)

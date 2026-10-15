@@ -40,6 +40,10 @@ Then create an OAuth client, once:
 3. Create credentials of type **Desktop app** and download the JSON.
 4. Save it as `client_secret.json` next to your database (`gmail-sort.sqlite`).
 
+That is everything needed before the first command. `survey` needs no `config.toml` and no
+API key, and the database file is created on first use. The first run opens a browser for
+consent and caches the token in `token.json` beside the database.
+
 The scope requested is `https://www.googleapis.com/auth/gmail.modify`, the narrowest
 that can add labels. The token is cached in `token.json` beside the database, with mode
 `600`. Both files are git-ignored.

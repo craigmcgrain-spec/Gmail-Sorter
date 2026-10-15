@@ -17,6 +17,7 @@ from typing import Iterable
 DEFAULT_QUERY = "has:nouserlabels -is:starred -is:important -larger:5M"
 DEFAULT_SIZE = "5M"
 DEFAULT_EXCERPT_CHARS = 2000
+DEFAULT_MODEL = "claude-haiku-4-5"
 PROVIDERS = ("anthropic", "openai")
 
 # Gmail size suffixes. K/M/G are binary here: the guard query is authoritative
@@ -150,6 +151,27 @@ def load_config(path: str | Path) -> Config:
         max_messages_per_run=int(llm.get("max_messages_per_run", 0)),
         labels=labels,
         rules=rules,
+    )
+
+
+def default_config() -> Config:
+    """The documented defaults, for `survey` before any config exists.
+
+    Survey only needs the guard query and the values it echoes back into the
+    proposal, so a fresh install can run it without writing a config first.
+    `labels` and `rules` are empty: this Config is never used to classify.
+    """
+    return Config(
+        query=DEFAULT_QUERY,
+        min_size_bytes=parse_size(DEFAULT_SIZE),
+        size_suffix=DEFAULT_SIZE,
+        excerpt_chars=DEFAULT_EXCERPT_CHARS,
+        store_bodies=True,
+        llm_provider=PROVIDERS[0],
+        llm_model=DEFAULT_MODEL,
+        max_messages_per_run=0,
+        labels=(),
+        rules=(),
     )
 
 

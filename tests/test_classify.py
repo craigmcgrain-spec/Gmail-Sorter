@@ -115,6 +115,15 @@ def test_cli_estimate_needs_no_api_key(tmp_path, monkeypatch):
                      "--db", str(tmp_path / "d.sqlite"), "--estimate"]) == 0
 
 
+def test_cli_classify_still_requires_a_config(tmp_path, monkeypatch):
+    # Only survey is lenient; classify needs a real taxonomy.
+    from gmail_sort import cli
+
+    monkeypatch.setattr(cli, "_open_client", lambda config, db: FakeGmailClient({}))
+    assert cli.main(["classify", "--config", str(tmp_path / "nope.toml"),
+                     "--db", str(tmp_path / "d.sqlite")]) == 2
+
+
 def test_no_llm_placeholders_do_not_block_a_later_llm_run(tmp_path, llm_returning):
     # --no-llm says "leave the rest undecided"; a later LLM run must honour that.
     msgs = {"m1": row("m1", from_domain="unknown.com")}
