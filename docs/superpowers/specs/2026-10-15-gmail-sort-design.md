@@ -118,6 +118,7 @@ gmail_sort/
   gmail.py       # GmailClient protocol, REST implementation, rate limiter
   store.py       # SQLite schema and queries
   rules.py       # pure rule engine
+  guards.py      # guard query construction and per-message re-validation
   llm.py         # provider-swappable classifier
 tests/
   fake_gmail.py  # in-memory GmailClient
@@ -257,7 +258,9 @@ for a run.
 
 ## Apply stage
 
-1. Read decisions where `source` is `rule` or `llm` and label is non-NULL.
+1. Read decisions where `source` is `rule` or `llm` and label is non-NULL, dropping
+   any `(message, label)` pair already applied and not since undone. This is what
+   makes a second `apply` issue no `batchModify` calls at all.
 2. Group message IDs by target label.
 3. Create any missing label (`labels.create`; `/` in a name produces Gmail's
    nesting) and cache its ID.
